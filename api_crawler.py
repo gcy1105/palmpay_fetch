@@ -115,10 +115,12 @@ class APICrawler:
     
     def update_auth_info(self, new_auth_info):
         """更新认证信息并保存"""
-        self.auth_info = new_auth_info
+        merged_auth_info = dict(self.auth_info or {})
+        merged_auth_info.update(new_auth_info or {})
+        self.auth_info = merged_auth_info
         # 设置认证信息过期时间（1小时）
         self.auth_expires_at = time.time() + (60 * 60)
-        self.save_auth_info(new_auth_info)
+        self.save_auth_info(self.auth_info)
     
     def add_log(self, message, log_type='info'):
         try:
@@ -650,11 +652,10 @@ class APICrawler:
                     # 时间戳转换为可读格式（使用西非时间UTC+1）
                     try:
                         import datetime
-                        import pytz
                         if isinstance(field_value, (int, float)):
                             timestamp = field_value / 1000 if field_value > 1000000000000 else field_value
                             # 使用西非时间（UTC+1）
-                            wat_tz = pytz.timezone('Africa/Lagos')
+                            wat_tz = datetime.timezone(datetime.timedelta(hours=1))
                             field_value = datetime.datetime.fromtimestamp(timestamp, wat_tz).strftime('%Y-%m-%d %H:%M:%S')
                     except:
                         pass
@@ -1279,6 +1280,16 @@ class APICrawler:
         self.add_log("开始通过API爬取订单数据...", 'cyan')
         self.order_data = []
         self.is_running = True
+        sink_label = "存储"
+        if self.storage and hasattr(self.storage, 'get_sink_label'):
+            sink_label = self.storage.get_sink_label()
+
+        if self.storage and hasattr(self.storage, 'resolve_account_info'):
+            account_info = self.storage.resolve_account_info(self.auth_info)
+            account_id = account_info.get('account_id', 'unknown_account')
+            logger.info(f"当前写入账号: {account_id}")
+            print(Fore.CYAN + f"当前写入账号: {account_id}")
+            self.add_log(f"当前写入账号: {account_id}", 'info')
         
         # 页面翻页爬取
         page_number = 1
@@ -1347,18 +1358,18 @@ class APICrawler:
                 self.order_data.append(order)
                 processed_count += 1
                 
-                # 实时保存到CSV文件
+                # 实时写入当前存储目标（接口或数据库）
                 if self.storage:
-                    self.storage.append_single_to_csv(order)
+                    self.storage.append_single_to_db(order, auth_info=self.auth_info)
                 
                 # 确保总订单数正确显示
                 current_total = getattr(self, 'total_orders', total_orders)
                 # 如果总订单数为0，使用已处理订单数作为临时替代
                 if current_total == 0:
                     current_total = processed_count
-                logger.info(f"已处理 {processed_count} / {current_total}个订单，正在保存第 {processed_count} 条到CSV")
-                print(Fore.GREEN + f"已处理 {processed_count} / {current_total}个订单，正在保存第 {processed_count} 条到CSV")
-                self.add_log(f"已处理 {processed_count} / {current_total}个订单，正在保存第 {processed_count} 条到CSV", 'green')
+                logger.info(f"已处理 {processed_count} / {current_total}个订单，正在写入第 {processed_count} 条到{sink_label}")
+                print(Fore.GREEN + f"已处理 {processed_count} / {current_total}个订单，正在写入第 {processed_count} 条到{sink_label}")
+                self.add_log(f"已处理 {processed_count} / {current_total}个订单，正在写入第 {processed_count} 条到{sink_label}", 'green')
             
             # 检查是否应该停止
             if not self.is_running or (stop_event and stop_event.is_set()):
@@ -1376,6 +1387,13 @@ class APICrawler:
             # 防止请求过快
             time.sleep(self.request_delay)
         
+        if self.storage and hasattr(self.storage, 'flush_pending'):
+            flush_ok = self.storage.flush_pending(auth_info=self.auth_info)
+            if flush_ok:
+                self.add_log("已完成剩余批次推送", 'green')
+            else:
+                self.add_log("剩余批次推送失败，请检查接口状态", 'yellow')
+
         logger.info(f"API爬取完成，共处理 {processed_count} 个订单")
         print(Fore.GREEN + f"API爬取完成，共处理 {processed_count} 个订单")
         self.add_log(f"API爬取完成，共处理 {processed_count} 个订单", 'green')

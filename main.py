@@ -443,9 +443,12 @@ class PalmpayCrawler:
                     self.gui_server.add_log("未获取到订单数据", 'yellow')
                     print(Fore.YELLOW + "未获取到订单数据")
                 
-                # 数据已通过append_single_to_csv实时保存，无需再次批量保存
-                print(Fore.GREEN + "数据已通过实时方式保存到CSV文件")
-                self.gui_server.add_log("数据已通过实时方式保存到CSV文件", 'green')
+                sink_label = "存储目标"
+                if self.storage and hasattr(self.storage, 'get_sink_label'):
+                    sink_label = self.storage.get_sink_label()
+                # 数据已通过append_single_to_db实时保存，无需再次批量保存
+                print(Fore.GREEN + f"数据已通过实时方式写入{sink_label}")
+                self.gui_server.add_log(f"数据已通过实时方式写入{sink_label}", 'green')
                 
             except Exception as e:
                 print(Fore.RED + f"爬虫任务执行失败: {str(e)}")
@@ -548,10 +551,13 @@ class PalmpayCrawler:
                 print(Fore.YELLOW + "未获取到订单数据")
                 return
             
-            # 存储到CSV
-            if self.storage.save_to_csv(order_data):
+            sink_label = "存储目标"
+            if self.storage and hasattr(self.storage, 'get_sink_label'):
+                sink_label = self.storage.get_sink_label()
+            # 存储到当前目标
+            if self.storage.save_to_db(order_data, auth_info=getattr(self.crawler, 'auth_info', None)):
                 logger.info(f"导出完成，共获取 {len(order_data)} 条订单数据")
-                print(Fore.GREEN + "导出完成！")
+                print(Fore.GREEN + f"导出完成，数据已写入{sink_label}！")
                 # 更新按钮状态
                 self.browser_manager.page.evaluate('''
                     const button = document.getElementById('export-button');

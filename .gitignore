@@ -17,3 +17,6 @@ dist/
 dist.zip
 
 data/*.csv
+data/*.db
+data/*.sqlite
+data/*.jsonl

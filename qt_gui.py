@@ -162,8 +162,8 @@ class QtGUI(QMainWindow):
         self.clear_log_btn.clicked.connect(self.clear_log)
         button_layout.addWidget(self.clear_log_btn)
         
-        # 打开Excel文件夹按钮
-        self.open_excel_btn = QPushButton('打开Excel文件夹')
+        # 打开数据目录按钮
+        self.open_excel_btn = QPushButton('打开数据目录')
         self.open_excel_btn.setFont(QFont('', 10))
         self.open_excel_btn.setStyleSheet(
             'background-color: #9C27B0; color: white; padding: 10px 20px; border-radius: 4px;'
@@ -411,7 +411,6 @@ class QtGUI(QMainWindow):
         """获取选中的日期时间戳（西非时区，UTC+1）"""
         from PyQt5.QtCore import QDateTime, QTime
         import datetime
-        import pytz
         
         # 获取开始日期，设置时间为00:00:00
         start_date = self.start_date_edit.date()
@@ -443,9 +442,9 @@ class QtGUI(QMainWindow):
             
             # UI中的时间是西非时间（UTC+1），API需要UTC时间戳
             # 将西非时间转换为UTC时间（减去1小时）
-            wat_tz = pytz.timezone('Africa/Lagos')
-            start_wat = wat_tz.localize(start_py_dt)
-            end_wat = wat_tz.localize(end_py_dt)
+            wat_tz = datetime.timezone(datetime.timedelta(hours=1))
+            start_wat = start_py_dt.replace(tzinfo=wat_tz)
+            end_wat = end_py_dt.replace(tzinfo=wat_tz)
             
             # 转换为UTC时间戳（毫秒）
             start_timestamp = int(start_wat.timestamp() * 1000)
@@ -605,11 +604,11 @@ class QtGUI(QMainWindow):
         self.close()
     
     def open_excel_folder(self):
-        """打开导出Excel文件的文件夹"""
+        """打开数据目录（包含数据库文件）"""
         import os
         import subprocess
         
-        # 导出Excel/CSV文件的默认保存路径
+        # 数据库存放目录
         excel_folder = os.path.join(os.getcwd(), 'data')
         
         try:

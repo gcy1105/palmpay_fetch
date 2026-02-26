@@ -4,7 +4,7 @@
 - 🎯 自动登录Palmpay商户后台并获取认证信息
 - 🔍 通过API方式高效获取订单列表和详情
 - ⚡ 支持批量爬取和自动翻页遍历
-- 💾 将数据存储到本地CSV文件，支持时间戳命名
+- 💾 默认将数据打包推送到外部接口（可选切换 MySQL）
 - 🖥️ 全新Qt GUI界面，操作更加直观
 - 🛡️ 完善的错误处理和日志记录
 - 🔄 自动检测和处理token过期问题
@@ -33,9 +33,22 @@ python -m playwright install chromium
 ## 配置说明
 1. 编辑 `.env` 文件，设置相关配置
 2. 主要配置项：
-   - `ORDER_DETAIL_API`: 订单详情API接口
-   - `REQUEST_DELAY`: 请求延迟（秒），默认0.1
-   - `MAX_RETRIES`: 最大重试次数
+  - `ORDER_DETAIL_API`: 订单详情API接口
+  - `REQUEST_DELAY`: 请求延迟（秒），默认0.1
+  - `MAX_RETRIES`: 最大重试次数
+  - `STORAGE_MODE`: 存储模式（`api` 或 `mysql`，默认 `api`）
+  - `PUSH_API_URL`: 接口地址（`STORAGE_MODE=api` 必填）
+  - `PUSH_API_METHOD`: 推送方法（默认 `POST`）
+  - `PUSH_API_AUTH_TOKEN`: Bearer Token（可选）
+  - `PUSH_API_HEADERS_JSON`: 额外请求头（JSON字符串，可选）
+  - `MYSQL_HOST`: MySQL主机（`STORAGE_MODE=mysql` 时生效）
+  - `MYSQL_PORT`: MySQL端口（默认 `3306`）
+  - `MYSQL_USER`: MySQL用户名
+  - `MYSQL_PASSWORD`: MySQL密码
+  - `MYSQL_DATABASE`: MySQL库名（默认 `palmpay_fetch`）
+  - `MYSQL_ACCOUNTS_TABLE`: 账号表名（默认 `accounts`）
+  - `MYSQL_ORDERS_TABLE`: 订单表名（默认 `orders`）
+  - `ACCOUNT_NAME`: 账号别名（可选，merchantId 缺失时用于区分账号）
 
 ## 运行方式
 ```bash
@@ -66,7 +79,7 @@ python3 main.py
 - 爬虫会自动：
   1. 获取订单列表数据
   2. 遍历每个订单并获取详情
-  3. 将数据保存到CSV文件
+  3. 将数据实时打包推送到接口（或按配置写入MySQL）
   4. 实时显示爬取进度
 
 ### 4. 停止爬取
@@ -74,9 +87,9 @@ python3 main.py
 - 程序会保存已爬取的数据，然后停止
 
 ### 5. 查看结果
-- 爬取完成后，数据会保存到 `./data` 目录
-- CSV文件名格式：`YYYYMMDD_HHMMSS_order_details.csv`
-- 文件包含完整的订单信息，可直接用Excel打开查看
+- 爬取完成后，数据会实时推送到 `PUSH_API_URL`
+- 推送失败的数据会写入 `data/push_failed.jsonl`
+- 订单会按 `account_id` 区分账号（优先使用 `merchantId/merchantid`）
 
 ## 界面操作说明
 
@@ -88,7 +101,7 @@ python3 main.py
 - **状态指示**: 显示当前爬虫状态和进度
 
 ### 日志格式说明
-- `已处理 30 / 5000个订单，正在保存第 30 条到CSV`
+- `已处理 30 / 5000个订单，正在写入第 30 条到接口`
 - 实时显示当前处理进度和总数
 
 ## 注意事项
@@ -155,8 +168,8 @@ python3 main.py
 ### Q: 点击"停止爬虫"按钮没有反应
 **A**: 请等待当前操作完成后，爬虫会自动停止
 
-### Q: CSV文件没有生成
-**A**: 请检查 `./data` 目录是否存在，或是否有写入权限
+### Q: 接口推送失败怎么办？
+**A**: 检查 `PUSH_API_URL`、鉴权头和网络；失败请求会自动写到 `data/push_failed.jsonl`
 
 ## 技术支持
 如遇到其他问题，请联系开发者提供技术支持。
