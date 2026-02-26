@@ -1,0 +1,13 @@
+{
+  "auth_info": {
+    "pp_token": "1fdd062f-84e4-4d9b-9a30-e2d73c76411a",
+    "token": "1fdd062f-84e4-4d9b-9a30-e2d73c76411a",
+    "deviceId": "ddfbb70b4c0d61c3dd39396aeedcc5ce",
+    "pp_device_id": "ddfbb70b4c0d61c3dd39396aeedcc5ce",
+    "pp_client_ver": "1.0.0_test&508212014",
+    "merchantid": "125060602371651",
+    "merchantId": "125060602371651"
+  },
+  "skip_browser": true,
+  "log_level": "ERROR"
+}
