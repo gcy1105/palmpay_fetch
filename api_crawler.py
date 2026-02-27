@@ -1290,6 +1290,13 @@ class APICrawler:
             logger.info(f"当前写入账号: {account_id}")
             print(Fore.CYAN + f"当前写入账号: {account_id}")
             self.add_log(f"当前写入账号: {account_id}", 'info')
+
+        if self.storage and hasattr(self.storage, 'start_csv_session'):
+            csv_file_path = self.storage.start_csv_session(auth_info=self.auth_info, force_new=True)
+            if csv_file_path:
+                logger.info(f"本次爬取CSV文件: {csv_file_path}")
+                print(Fore.CYAN + f"本次爬取CSV文件: {csv_file_path}")
+                self.add_log(f"本次爬取CSV文件: {csv_file_path}", 'info')
         
         # 页面翻页爬取
         page_number = 1
@@ -1390,9 +1397,9 @@ class APICrawler:
         if self.storage and hasattr(self.storage, 'flush_pending'):
             flush_ok = self.storage.flush_pending(auth_info=self.auth_info)
             if flush_ok:
-                self.add_log("已完成剩余批次推送", 'green')
+                self.add_log("已完成CSV到接口推送", 'green')
             else:
-                self.add_log("剩余批次推送失败，请检查接口状态", 'yellow')
+                self.add_log("CSV到接口推送失败，请检查接口状态", 'yellow')
 
         logger.info(f"API爬取完成，共处理 {processed_count} 个订单")
         print(Fore.GREEN + f"API爬取完成，共处理 {processed_count} 个订单")

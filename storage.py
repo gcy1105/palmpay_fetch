@@ -1,3 +1,4 @@
+import csv
 import json
 import os
 import re
@@ -26,8 +27,10 @@ class Storage:
         self.session = requests.Session()
         self.conn = None
         self.pymysql = None
-        self._api_batch_buffer = []
         self._last_account_info_api = None
+        self._current_csv_file_path = ''
+        self._current_csv_headers = []
+        self._last_pushed_csv_file_path = ''
 
         self.storage_mode = (os.getenv('STORAGE_MODE') or 'api').strip().lower()
         if self.storage_mode not in ('api', 'mysql'):
@@ -157,7 +160,7 @@ class Storage:
         }
 
     def get_sink_label(self):
-        return '接口' if self.storage_mode == 'api' else '数据库'
+        return 'CSV' if self.storage_mode == 'api' else '数据库'
 
     # -------------------- API mode --------------------
     def _load_api_config(self):
@@ -248,16 +251,15 @@ class Storage:
 
     def _build_order_payload_for_api(self, order, account_info):
         row = dict(order)
-        channel_value = self.push_channel or account_info.get('account_id') or 'palmpay'
+        merchant_channel = self._to_text(row.get('Order Information_Merchant ID')).strip()
+        channel_value = merchant_channel or self.push_channel or account_info.get('account_id') or 'palmpay'
 
         # 按约定：order_create_time 仅使用文件字段 Order Information_Create Time
         create_time_raw = self._to_text(row.get('Order Information_Create Time')).strip()
         settlement_time_raw = self._to_text(row.get('Settlement Information_Settlement Time')).strip()
         update_time_raw = self._to_text(row.get('Order Information_Update Time')).strip()
 
-        order_order_no = self._to_text(
-            self._pick_first(row, ['Order Information_Order No', 'order_no', 'Order No'])
-        ).strip()
+        order_order_no = self._to_text(row.get('Order Information_Order No')).strip()
         order_no = self._to_text(self._pick_first(row, ['order_no', 'Order Information_Order No'])).strip()
         if not order_order_no:
             order_order_no = order_no
@@ -356,6 +358,94 @@ class Storage:
 
         return mapped
 
+    def _new_csv_filename(self):
+        timestamp = datetime.now(WAT_TZ).strftime('%Y%m%d_%H%M%S')
+        filename = f"{timestamp}_order_details.csv"
+        candidate = os.path.join(self.data_dir, filename)
+        if not os.path.exists(candidate):
+            return candidate
+
+        index = 1
+        while True:
+            filename = f"{timestamp}_{index:02d}_order_details.csv"
+            candidate = os.path.join(self.data_dir, filename)
+            if not os.path.exists(candidate):
+                return candidate
+            index += 1
+
+    def _start_new_csv_session_locked(self):
+        self._current_csv_file_path = self._new_csv_filename()
+        self._current_csv_headers = []
+        self._last_pushed_csv_file_path = ''
+        return self._current_csv_file_path
+
+    def start_csv_session(self, auth_info=None, force_new=False):
+        with self.write_lock:
+            if self.storage_mode != 'api':
+                return ''
+
+            account_info = self.resolve_account_info(auth_info)
+            self._last_account_info_api = account_info
+            if force_new or not self._current_csv_file_path:
+                csv_path = self._start_new_csv_session_locked()
+                print(Fore.GREEN + f"已创建CSV文件: {csv_path}")
+            return self._current_csv_file_path
+
+    def _expand_current_csv_headers_locked(self, extra_headers):
+        if not extra_headers:
+            return
+        if not self._current_csv_file_path or not os.path.exists(self._current_csv_file_path):
+            self._current_csv_headers.extend(extra_headers)
+            return
+
+        new_headers = self._current_csv_headers + extra_headers
+        temp_path = f"{self._current_csv_file_path}.tmp"
+        with open(self._current_csv_file_path, 'r', encoding='utf-8-sig', newline='') as src:
+            reader = csv.DictReader(src)
+            old_rows = list(reader)
+
+        with open(temp_path, 'w', encoding='utf-8-sig', newline='') as dst:
+            writer = csv.DictWriter(dst, fieldnames=new_headers)
+            writer.writeheader()
+            for row in old_rows:
+                writer.writerow({h: self._to_text(row.get(h, '')) for h in new_headers})
+
+        os.replace(temp_path, self._current_csv_file_path)
+        self._current_csv_headers = new_headers
+
+    def _append_rows_to_current_csv_locked(self, data_list):
+        rows = [dict(item) for item in data_list if item]
+        if not rows:
+            return 0
+
+        if not self._current_csv_file_path:
+            self._start_new_csv_session_locked()
+
+        if not self._current_csv_headers:
+            self._current_csv_headers = list(rows[0].keys())
+
+        known = set(self._current_csv_headers)
+        extra_headers = []
+        for row in rows:
+            for key in row.keys():
+                if key not in known:
+                    known.add(key)
+                    extra_headers.append(key)
+
+        if extra_headers:
+            self._expand_current_csv_headers_locked(extra_headers)
+
+        file_exists = os.path.exists(self._current_csv_file_path)
+        needs_header = (not file_exists) or os.path.getsize(self._current_csv_file_path) == 0
+        with open(self._current_csv_file_path, 'a', encoding='utf-8-sig', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=self._current_csv_headers)
+            if needs_header:
+                writer.writeheader()
+            for row in rows:
+                writer.writerow({h: self._to_text(row.get(h, '')) for h in self._current_csv_headers})
+
+        return len(rows)
+
     def _persist_failed_payload(self, payload, error_message):
         if not self.push_save_failed:
             print(Fore.RED + f"接口推送失败: {error_message}")
@@ -370,7 +460,11 @@ class Storage:
             f.write(json.dumps(record, ensure_ascii=False, default=str) + '\n')
 
     def _send_orders_to_api(self, orders, account_info):
-        channel_value = self.push_channel or account_info.get('account_id') or 'palmpay'
+        channel_value = ''
+        if orders and isinstance(orders[0], dict):
+            channel_value = self._to_text(orders[0].get('channel')).strip()
+        if not channel_value:
+            channel_value = self.push_channel or account_info.get('account_id') or 'palmpay'
         body = {
             'channel': channel_value,
             'items': orders,
@@ -398,19 +492,29 @@ class Storage:
             self._persist_failed_payload(body, str(e))
             return False
 
-    def _flush_api_batch_locked(self, account_info, force=False):
-        if not self._api_batch_buffer:
+    def _push_csv_to_api_locked(self, csv_file_path, account_info):
+        if not csv_file_path or not os.path.exists(csv_file_path):
+            print(Fore.YELLOW + f"CSV文件不存在，跳过推送: {csv_file_path}")
+            return False, 0
+
+        with open(csv_file_path, 'r', encoding='utf-8-sig', newline='') as f:
+            reader = csv.DictReader(f)
+            rows = [row for row in reader]
+
+        if not rows:
+            print(Fore.YELLOW + f"CSV没有可推送数据: {csv_file_path}")
             return True, 0
 
+        prepared_orders = [self._build_order_payload_for_api(row, account_info) for row in rows]
         total_sent = 0
-        while len(self._api_batch_buffer) >= self.push_api_batch_size or (force and self._api_batch_buffer):
-            batch = self._api_batch_buffer[: self.push_api_batch_size]
+        for i in range(0, len(prepared_orders), self.push_api_batch_size):
+            batch = prepared_orders[i:i + self.push_api_batch_size]
             ok = self._send_orders_to_api(batch, account_info)
             if not ok:
                 return False, total_sent
-            del self._api_batch_buffer[: len(batch)]
             total_sent += len(batch)
 
+        self._last_pushed_csv_file_path = csv_file_path
         return True, total_sent
 
     def flush_pending(self, auth_info=None):
@@ -418,13 +522,18 @@ class Storage:
             if self.storage_mode != 'api':
                 return True
 
-            if not self._api_batch_buffer:
+            if not self._current_csv_file_path:
                 return True
 
-            account_info = self.resolve_account_info(auth_info) if auth_info else (self._last_account_info_api or {'account_id': self.push_channel or 'palmpay'})
-            ok, sent = self._flush_api_batch_locked(account_info, force=True)
+            if self._last_pushed_csv_file_path == self._current_csv_file_path:
+                return True
+
+            account_info = self.resolve_account_info(auth_info) if auth_info else (
+                self._last_account_info_api or {'account_id': self.push_channel or 'palmpay'}
+            )
+            ok, sent = self._push_csv_to_api_locked(self._current_csv_file_path, account_info)
             if ok and sent > 0:
-                print(Fore.GREEN + f"已推送剩余批次到接口: count={sent}")
+                print(Fore.GREEN + f"CSV推送完成: file={self._current_csv_file_path} count={sent}")
             return ok
 
     # -------------------- MySQL mode --------------------
@@ -722,7 +831,7 @@ class Storage:
 
     # -------------------- unified write API --------------------
     def append_single_to_db(self, data_item, auth_info=None):
-        """实时写入单条订单到接口或数据库"""
+        """实时写入单条订单到CSV或数据库"""
         if not data_item:
             print(Fore.RED + '没有数据需要写入')
             return False
@@ -732,20 +841,8 @@ class Storage:
 
             if self.storage_mode == 'api':
                 self._last_account_info_api = account_info
-                order = self._build_order_payload_for_api(data_item, account_info)
-                self._api_batch_buffer.append(order)
-
-                # 达到阈值才发送，满足“每批1000条”
-                if len(self._api_batch_buffer) < self.push_api_batch_size:
-                    return True
-
-                ok, sent = self._flush_api_batch_locked(account_info, force=False)
-                if ok:
-                    print(
-                        Fore.GREEN
-                        + f"已批量推送接口: channel={self.push_channel or account_info['account_id']} count={sent}"
-                    )
-                return ok
+                written = self._append_rows_to_current_csv_locked([data_item])
+                return written == 1
 
             try:
                 self._ensure_mysql_connection()
@@ -764,7 +861,7 @@ class Storage:
                 return True
 
     def save_to_db(self, data_list, auth_info=None):
-        """批量写入订单到接口或数据库"""
+        """批量写入订单到CSV或数据库"""
         if not data_list:
             print(Fore.RED + '没有数据需要写入')
             return False
@@ -773,43 +870,15 @@ class Storage:
             account_info = self.resolve_account_info(auth_info)
 
             if self.storage_mode == 'api':
-                prepared_orders = [self._build_order_payload_for_api(item, account_info) for item in data_list if item]
-                if not prepared_orders:
+                self._last_account_info_api = account_info
+                csv_path = self._start_new_csv_session_locked()
+                saved_count = self._append_rows_to_current_csv_locked(data_list)
+                if saved_count <= 0:
                     return False
-
-                success_count = 0
-                all_ok = True
-                for i in range(0, len(prepared_orders), self.push_api_batch_size):
-                    batch = prepared_orders[i:i + self.push_api_batch_size]
-                    ok = self._send_orders_to_api(batch, account_info)
-                    if ok:
-                        success_count += len(batch)
-                    else:
-                        all_ok = False
-
-                if all_ok:
-                    print(
-                        Fore.GREEN
-                        + (
-                            f"批量推送接口完成: account={account_info['account_id']} "
-                            f"count={success_count} url={self.push_api_url}"
-                        )
-                    )
-                else:
-                    if self.push_save_failed:
-                        print(
-                            Fore.YELLOW
-                            + (
-                                f"部分批次推送失败，已落重试文件: {self.push_failed_file} "
-                                f"success={success_count}/{len(prepared_orders)}"
-                            )
-                        )
-                    else:
-                        print(
-                            Fore.YELLOW
-                            + f"部分批次推送失败（未落地重试文件） success={success_count}/{len(prepared_orders)}"
-                        )
-                return all_ok
+                ok, sent = self._push_csv_to_api_locked(csv_path, account_info)
+                if ok:
+                    print(Fore.GREEN + f"批量写入CSV并推送完成: file={csv_path} count={sent}")
+                return ok
 
             try:
                 self._ensure_mysql_connection()
