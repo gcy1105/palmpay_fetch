@@ -250,12 +250,10 @@ class Storage:
         row = dict(order)
         channel_value = self.push_channel or account_info.get('account_id') or 'palmpay'
 
-        create_time_raw = self._pick_first(row, ['Order Information_Create Time', 'create_time', 'Create Time'])
-        settlement_time_raw = self._pick_first(
-            row,
-            ['Settlement Information_Settlement Time', 'settlement_time', 'Settlement Time'],
-        )
-        update_time_raw = self._pick_first(row, ['Order Information_Update Time', 'update_time', 'Update Time'])
+        # 按约定：order_create_time 仅使用文件字段 Order Information_Create Time
+        create_time_raw = self._to_text(row.get('Order Information_Create Time')).strip()
+        settlement_time_raw = self._to_text(row.get('Settlement Information_Settlement Time')).strip()
+        update_time_raw = self._to_text(row.get('Order Information_Update Time')).strip()
 
         order_order_no = self._to_text(
             self._pick_first(row, ['Order Information_Order No', 'order_no', 'Order No'])
