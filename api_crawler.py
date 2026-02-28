@@ -1303,103 +1303,103 @@ class APICrawler:
         processed_count = 0
         # 保存订单总数
         self.total_orders = 0
-        
-        while self.is_running:
-            # 检查是否收到停止信号
-            if stop_event and stop_event.is_set():
-                logger.info("收到停止信号，停止爬取")
-                print(Fore.YELLOW + "收到停止信号，停止爬取")
-                self.add_log("收到停止信号，停止爬取", 'yellow')
-                break
-            
-            print(Fore.CYAN + f"处理第 {page_number} 页...")
-            logger.info(f"处理第 {page_number} 页")
-            self.add_log(f"处理第 {page_number} 页...", 'cyan')
-            
-            # 通过API获取订单列表
-            orders, pagination = self.get_order_list_from_api(start_timestamp, end_timestamp, page_number=page_number, page_size=self.page_size, settlement_status=settlement_status)
-            
-            if not orders:
-                if page_number == 1:
-                    logger.warning("没有找到订单，爬取结束")
-                    print(Fore.RED + "没有找到订单，爬取结束")
-                    self.add_log("没有找到订单，爬取结束", 'red')
-                else:
-                    logger.info("已获取所有订单，爬取完成")
-                    print(Fore.GREEN + "已获取所有订单，爬取完成")
-                    self.add_log("已获取所有订单，爬取完成", 'green')
-                break
-            
-            # 检查是否已经到达最后一页
-            current_page = pagination.get('current', page_number)
-            total_pages = pagination.get('pages', 0)
-            total_orders = pagination.get('total', 0)
-            
-            # 打印分页信息（更加醒目）
-            print(Fore.CYAN + "=" * 60)
-            print(Fore.CYAN + f"【爬取进度】当前页: {current_page} | 总页数: {total_pages} | 总条数: {total_orders}")
-            print(Fore.CYAN + "=" * 60)
-            logger.info(f"当前页: {current_page}, 总页数: {total_pages}, 总条数: {total_orders}")
-            self.add_log(f"【爬取进度】第 {current_page}/{total_pages} 页，共 {total_orders} 条订单", 'cyan')
-            
-            # 保存订单总数
-            if total_orders > 0:
-                self.total_orders = total_orders
-            else:
-                # 如果API返回的total为0，累加当前页的订单数
-                self.total_orders += len(orders)
-            
-            # 批量获取订单详情
-            batch_orders = self.get_order_details_batch(orders)
-            
-            # 处理获取到的订单详情
-            for order in batch_orders:
-                # 检查是否应该停止
-                if not self.is_running or (stop_event and stop_event.is_set()):
+        try:
+            while self.is_running:
+                # 检查是否收到停止信号
+                if stop_event and stop_event.is_set():
                     logger.info("收到停止信号，停止爬取")
                     print(Fore.YELLOW + "收到停止信号，停止爬取")
                     self.add_log("收到停止信号，停止爬取", 'yellow')
                     break
                 
-                # 添加到总数据
-                self.order_data.append(order)
-                processed_count += 1
+                print(Fore.CYAN + f"处理第 {page_number} 页...")
+                logger.info(f"处理第 {page_number} 页")
+                self.add_log(f"处理第 {page_number} 页...", 'cyan')
                 
-                # 实时写入当前存储目标（接口或数据库）
-                if self.storage:
-                    self.storage.append_single_to_db(order, auth_info=self.auth_info)
+                # 通过API获取订单列表
+                orders, pagination = self.get_order_list_from_api(start_timestamp, end_timestamp, page_number=page_number, page_size=self.page_size, settlement_status=settlement_status)
                 
-                # 确保总订单数正确显示
-                current_total = getattr(self, 'total_orders', total_orders)
-                # 如果总订单数为0，使用已处理订单数作为临时替代
-                if current_total == 0:
-                    current_total = processed_count
-                logger.info(f"已处理 {processed_count} / {current_total}个订单，正在写入第 {processed_count} 条到{sink_label}")
-                print(Fore.GREEN + f"已处理 {processed_count} / {current_total}个订单，正在写入第 {processed_count} 条到{sink_label}")
-                self.add_log(f"已处理 {processed_count} / {current_total}个订单，正在写入第 {processed_count} 条到{sink_label}", 'green')
-            
-            # 检查是否应该停止
-            if not self.is_running or (stop_event and stop_event.is_set()):
-                logger.info("收到停止信号，停止翻页")
-                break
-            
-            if current_page >= total_pages and total_pages > 0:
-                logger.info(f"已到达最后一页（第 {current_page} 页，共 {total_pages} 页），爬取完成")
-                print(Fore.GREEN + f"已到达最后一页（第 {current_page} 页，共 {total_pages} 页），爬取完成")
-                self.add_log(f"已到达最后一页（第 {current_page} 页，共 {total_pages} 页），爬取完成", 'green')
-                break
-            
-            page_number += 1
-            
-            # 防止请求过快
-            time.sleep(self.request_delay)
-        
-        if self.storage and hasattr(self.storage, 'flush_pending'):
-            flush_ok = self.storage.flush_pending(auth_info=self.auth_info)
-            if flush_ok:
-                self.add_log("已完成CSV到接口推送", 'green')
-            else:
-                self.add_log("CSV到接口推送失败，请检查接口状态", 'yellow')
+                if not orders:
+                    if page_number == 1:
+                        logger.warning("没有找到订单，爬取结束")
+                        print(Fore.RED + "没有找到订单，爬取结束")
+                        self.add_log("没有找到订单，爬取结束", 'red')
+                    else:
+                        logger.info("已获取所有订单，爬取完成")
+                        print(Fore.GREEN + "已获取所有订单，爬取完成")
+                        self.add_log("已获取所有订单，爬取完成", 'green')
+                    break
+                
+                # 检查是否已经到达最后一页
+                current_page = pagination.get('current', page_number)
+                total_pages = pagination.get('pages', 0)
+                total_orders = pagination.get('total', 0)
+                
+                # 打印分页信息（更加醒目）
+                print(Fore.CYAN + "=" * 60)
+                print(Fore.CYAN + f"【爬取进度】当前页: {current_page} | 总页数: {total_pages} | 总条数: {total_orders}")
+                print(Fore.CYAN + "=" * 60)
+                logger.info(f"当前页: {current_page}, 总页数: {total_pages}, 总条数: {total_orders}")
+                self.add_log(f"【爬取进度】第 {current_page}/{total_pages} 页，共 {total_orders} 条订单", 'cyan')
+                
+                # 保存订单总数
+                if total_orders > 0:
+                    self.total_orders = total_orders
+                else:
+                    # 如果API返回的total为0，累加当前页的订单数
+                    self.total_orders += len(orders)
+                
+                # 批量获取订单详情
+                batch_orders = self.get_order_details_batch(orders)
+                
+                # 处理获取到的订单详情
+                for order in batch_orders:
+                    # 检查是否应该停止
+                    if not self.is_running or (stop_event and stop_event.is_set()):
+                        logger.info("收到停止信号，停止爬取")
+                        print(Fore.YELLOW + "收到停止信号，停止爬取")
+                        self.add_log("收到停止信号，停止爬取", 'yellow')
+                        break
+                    
+                    # 添加到总数据
+                    self.order_data.append(order)
+                    processed_count += 1
+                    
+                    # 实时写入当前存储目标（接口或数据库）
+                    if self.storage:
+                        self.storage.append_single_to_db(order, auth_info=self.auth_info)
+                    
+                    # 确保总订单数正确显示
+                    current_total = getattr(self, 'total_orders', total_orders)
+                    # 如果总订单数为0，使用已处理订单数作为临时替代
+                    if current_total == 0:
+                        current_total = processed_count
+                    logger.info(f"已处理 {processed_count} / {current_total}个订单，正在写入第 {processed_count} 条到{sink_label}")
+                    print(Fore.GREEN + f"已处理 {processed_count} / {current_total}个订单，正在写入第 {processed_count} 条到{sink_label}")
+                    self.add_log(f"已处理 {processed_count} / {current_total}个订单，正在写入第 {processed_count} 条到{sink_label}", 'green')
+                
+                # 检查是否应该停止
+                if not self.is_running or (stop_event and stop_event.is_set()):
+                    logger.info("收到停止信号，停止翻页")
+                    break
+                
+                if current_page >= total_pages and total_pages > 0:
+                    logger.info(f"已到达最后一页（第 {current_page} 页，共 {total_pages} 页），爬取完成")
+                    print(Fore.GREEN + f"已到达最后一页（第 {current_page} 页，共 {total_pages} 页），爬取完成")
+                    self.add_log(f"已到达最后一页（第 {current_page} 页，共 {total_pages} 页），爬取完成", 'green')
+                    break
+                
+                page_number += 1
+                
+                # 防止请求过快
+                time.sleep(self.request_delay)
+        finally:
+            if self.storage and hasattr(self.storage, 'flush_pending'):
+                flush_ok = self.storage.flush_pending(auth_info=self.auth_info)
+                if flush_ok:
+                    self.add_log("已完成CSV到接口推送(最终flush)", 'green')
+                else:
+                    self.add_log("CSV到接口推送失败(最终flush)，请检查接口状态", 'yellow')
 
         logger.info(f"API爬取完成，共处理 {processed_count} 个订单")
         print(Fore.GREEN + f"API爬取完成，共处理 {processed_count} 个订单")

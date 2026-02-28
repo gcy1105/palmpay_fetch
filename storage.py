@@ -31,26 +31,15 @@ class Storage:
         self._current_csv_file_path = ''
         self._current_csv_headers = []
         self._last_pushed_csv_file_path = ''
-
-        self.storage_mode = (os.getenv('STORAGE_MODE') or 'api').strip().lower()
-        if self.storage_mode not in ('api', 'mysql'):
-            print(Fore.YELLOW + f"未知 STORAGE_MODE={self.storage_mode}，已回退到 api")
-            self.storage_mode = 'api'
-
-        if self.storage_mode == 'mysql':
-            self._load_mysql_config()
-            self.pymysql = self._load_mysql_driver()
-            self._connect_and_init_db()
-            print(Fore.GREEN + f"数据库初始化完成: {self.get_database_path()}")
-        else:
-            self._load_api_config()
-            if self.api_enabled:
-                if self.push_save_failed:
-                    print(Fore.GREEN + f"接口推送模式已启用: {self.push_api_url}（失败会落地到 {self.push_failed_file}）")
-                else:
-                    print(Fore.GREEN + f"接口推送模式已启用: {self.push_api_url}（失败不落本地）")
+        self.storage_mode = 'api'
+        self._load_api_config()
+        if self.api_enabled:
+            if self.push_save_failed:
+                print(Fore.GREEN + f"接口推送模式已启用: {self.push_api_url}（失败会落地到 {self.push_failed_file}）")
             else:
-                print(Fore.YELLOW + "接口推送模式已启用，但未配置 PUSH_API_URL")
+                print(Fore.GREEN + f"接口推送模式已启用: {self.push_api_url}（失败不落本地）")
+        else:
+            print(Fore.RED + "❌ 未配置 PUSH_API_URL：无法推送，请检查 .env")
 
     def _load_env_file(self):
         """加载.env文件，支持打包后的程序"""
@@ -447,8 +436,8 @@ class Storage:
         return len(rows)
 
     def _persist_failed_payload(self, payload, error_message):
+        print(Fore.RED + f"接口推送失败: {error_message}")
         if not self.push_save_failed:
-            print(Fore.RED + f"接口推送失败: {error_message}")
             return
         record = {
             'failed_at': datetime.now(WAT_TZ).strftime('%Y-%m-%d %H:%M:%S'),
@@ -484,9 +473,25 @@ class Storage:
                 timeout=self.push_api_timeout,
                 verify=self.push_verify_ssl,
             )
+            preview = (response.text or "")[:800]
+            print(Fore.CYAN + f"[Push] -> {self.push_api_url} items={len(orders)} http={response.status_code}")
+            print(Fore.CYAN + f"[Push] resp(0~800): {preview}")
 
+            # 1) HTTP 必须 2xx
             if not (200 <= response.status_code < 300):
-                raise RuntimeError(f"HTTP {response.status_code}: {response.text[:300]}")
+                raise RuntimeError(f"HTTP {response.status_code}: {preview}")
+
+            # 2) JSON 必须能解析，且 code==0
+            try:
+                data = response.json()
+            except Exception:
+                raise RuntimeError(f"Response is not JSON: {preview}")
+
+            code = data.get("code", None)
+            if code != 0:
+                msg = data.get("message") or data.get("msg") or data.get("error") or ""
+                raise RuntimeError(f"API failed: code={code}, message={msg}, resp={preview}")
+
             return True
         except Exception as e:
             self._persist_failed_payload(body, str(e))

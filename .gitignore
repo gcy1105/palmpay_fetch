@@ -15,6 +15,7 @@ crawler.log
 build/
 dist/
 dist.zip
+.pyinstaller/
 
 data/*.csv
 data/*.db
