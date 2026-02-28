@@ -1,3 +1,4 @@
+import math
 import time
 import json
 import sys
@@ -1335,6 +1336,10 @@ class APICrawler:
                 total_pages = pagination.get('pages', 0)
                 total_orders = pagination.get('total', 0)
                 
+                # ✅ 兜底：如果接口没给 pages，就用 total/page_size 自己算
+                if (not total_pages or total_pages <= 0) and total_orders and self.page_size:
+                    total_pages = math.ceil(total_orders / int(self.page_size))
+                    pagination['pages'] = total_pages  # 可选：写回去方便后续使用
                 # 打印分页信息（更加醒目）
                 print(Fore.CYAN + "=" * 60)
                 print(Fore.CYAN + f"【爬取进度】当前页: {current_page} | 总页数: {total_pages} | 总条数: {total_orders}")
