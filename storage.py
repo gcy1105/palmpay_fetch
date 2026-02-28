@@ -847,6 +847,13 @@ class Storage:
             if self.storage_mode == 'api':
                 self._last_account_info_api = account_info
                 written = self._append_rows_to_current_csv_locked([data_item])
+
+                # ✅ 新增：攒够 batch 就推一次（不等爬完）
+                self._api_rows_since_last_flush = getattr(self, "_api_rows_since_last_flush", 0) + 1
+                if self._api_rows_since_last_flush >= self.push_api_batch_size:
+                    self._api_rows_since_last_flush = 0
+                    self.flush_pending(auth_info=auth_info)
+
                 return written == 1
 
             try:
