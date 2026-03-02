@@ -450,6 +450,14 @@ class PalmpayCrawler:
                 print(Fore.GREEN + f"数据已通过实时方式写入{sink_label}")
                 self.gui_server.add_log(f"数据已通过实时方式写入{sink_label}", 'green')
                 
+                # ✅ 新增：爬虫完成后，推送所有剩余数据（不等待batch_size）
+                if self.storage:
+                    print(Fore.CYAN + "正在推送剩余数据到接口...")
+                    self.gui_server.add_log("正在推送剩余数据到接口...", 'cyan')
+                    self.storage.flush_pending(auth_info=getattr(self.crawler, 'auth_info', None))
+                    print(Fore.GREEN + "剩余数据推送完成")
+                    self.gui_server.add_log("剩余数据推送完成", 'green')
+                
             except Exception as e:
                 print(Fore.RED + f"爬虫任务执行失败: {str(e)}")
                 self.gui_server.add_log(f"爬虫任务执行失败: {str(e)}", 'red')

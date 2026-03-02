@@ -1455,8 +1455,6 @@ class APICrawler:
                 self.add_log(f"未获取到订单 {order_no} 详情数据，使用订单列表中的基本信息", 'yellow')
                 # 未获取到详情时，返回订单列表中的基本信息
                 return order
-            
-            return order
         
         # 使用线程池并行获取订单详情
         max_workers = min(5, len(orders))  # 最多5个线程

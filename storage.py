@@ -23,7 +23,7 @@ class Storage:
             os.makedirs(self.data_dir)
             print(Fore.GREEN + f"创建数据存储目录: {self.data_dir}")
 
-        self.write_lock = threading.Lock()
+        self.write_lock = threading.RLock()  # 使用 RLock 支持同一线程重复获取
         self.session = requests.Session()
         self.conn = None
         self.pymysql = None
@@ -31,6 +31,7 @@ class Storage:
         self._current_csv_file_path = ''
         self._current_csv_headers = []
         self._last_pushed_csv_file_path = ''
+        self._api_rows_since_last_flush = 0  # 初始化批量推送计数器
         self.storage_mode = 'api'
         self._load_api_config()
         if self.api_enabled:
@@ -366,6 +367,7 @@ class Storage:
         self._current_csv_file_path = self._new_csv_filename()
         self._current_csv_headers = []
         self._last_pushed_csv_file_path = ''
+        self._api_rows_since_last_flush = 0  # 重置批量推送计数器
         return self._current_csv_file_path
 
     def start_csv_session(self, auth_info=None, force_new=False):
@@ -461,9 +463,11 @@ class Storage:
 
         if not self.api_enabled:
             self._persist_failed_payload(body, 'PUSH_API_URL 未配置')
+            print(Fore.RED + f"❌ API 未启用（PUSH_API_URL 未配置）")
             return False
 
         try:
+            print(Fore.YELLOW + f"⏳ 正在推送 {len(orders)} 条数据到 {self.push_api_url}...")
             headers = self._build_api_headers()
             response = self.session.request(
                 method=self.push_api_method,
@@ -474,8 +478,8 @@ class Storage:
                 verify=self.push_verify_ssl,
             )
             preview = (response.text or "")[:800]
-            print(Fore.CYAN + f"[Push] -> {self.push_api_url} items={len(orders)} http={response.status_code}")
-            print(Fore.CYAN + f"[Push] resp(0~800): {preview}")
+            print(Fore.CYAN + f"📊 [API 响应] 状态: HTTP {response.status_code} | 数据条数: {len(orders)}")
+            print(Fore.CYAN + f"📄 [响应内容] {preview}")
 
             # 1) HTTP 必须 2xx
             if not (200 <= response.status_code < 300):
@@ -492,8 +496,10 @@ class Storage:
                 msg = data.get("message") or data.get("msg") or data.get("error") or ""
                 raise RuntimeError(f"API failed: code={code}, message={msg}, resp={preview}")
 
+            print(Fore.GREEN + f"✅ API 推送成功！已发送 {len(orders)} 条数据")
             return True
         except Exception as e:
+            print(Fore.RED + f"❌ API 推送失败: {str(e)}")
             self._persist_failed_payload(body, str(e))
             return False
 
@@ -516,30 +522,36 @@ class Storage:
             batch = prepared_orders[i:i + self.push_api_batch_size]
             ok = self._send_orders_to_api(batch, account_info)
             if not ok:
+                print(Fore.RED + f"批量推送失败，已推送 {total_sent} 条数据")
                 return False, total_sent
             total_sent += len(batch)
 
-        self._last_pushed_csv_file_path = csv_file_path
+        # ✅ 推送成功后，开始新的 CSV 会话
+        print(Fore.GREEN + f"CSV推送全部成功，共 {total_sent} 条，开始新的会话...")
+        self._start_new_csv_session_locked()
         return True, total_sent
 
+    def _flush_pending_locked(self, auth_info=None):
+        """内部 flush 方法，假设 write_lock 已持有"""
+        if self.storage_mode != 'api':
+            return True
+
+        if not self._current_csv_file_path:
+            return True
+
+        account_info = self.resolve_account_info(auth_info) if auth_info else (
+            self._last_account_info_api or {'account_id': self.push_channel or 'palmpay'}
+        )
+        ok, sent = self._push_csv_to_api_locked(self._current_csv_file_path, account_info)
+        if ok and sent > 0:
+            print(Fore.GREEN + f"✅ CSV推送完成: file={self._current_csv_file_path} count={sent}")
+            self._last_pushed_csv_file_path = self._current_csv_file_path
+        return ok
+
     def flush_pending(self, auth_info=None):
+        """外部调用的 flush 方法，会获取锁"""
         with self.write_lock:
-            if self.storage_mode != 'api':
-                return True
-
-            if not self._current_csv_file_path:
-                return True
-
-            if self._last_pushed_csv_file_path == self._current_csv_file_path:
-                return True
-
-            account_info = self.resolve_account_info(auth_info) if auth_info else (
-                self._last_account_info_api or {'account_id': self.push_channel or 'palmpay'}
-            )
-            ok, sent = self._push_csv_to_api_locked(self._current_csv_file_path, account_info)
-            if ok and sent > 0:
-                print(Fore.GREEN + f"CSV推送完成: file={self._current_csv_file_path} count={sent}")
-            return ok
+            return self._flush_pending_locked(auth_info=auth_info)
 
     # -------------------- MySQL mode --------------------
     def _load_mysql_config(self):
@@ -849,10 +861,19 @@ class Storage:
                 written = self._append_rows_to_current_csv_locked([data_item])
 
                 # ✅ 新增：攒够 batch 就推一次（不等爬完）
-                self._api_rows_since_last_flush = getattr(self, "_api_rows_since_last_flush", 0) + 1
-                if self._api_rows_since_last_flush >= self.push_api_batch_size:
-                    self._api_rows_since_last_flush = 0
-                    self.flush_pending(auth_info=auth_info)
+                # 基于实际写入的行数来计数
+                if written > 0:
+                    self._api_rows_since_last_flush = getattr(self, "_api_rows_since_last_flush", 0) + written
+                    print(Fore.CYAN + f"[Progress] 累积行数: {self._api_rows_since_last_flush} / {self.push_api_batch_size}")
+                    
+                    if self._api_rows_since_last_flush >= self.push_api_batch_size:
+                        print(Fore.YELLOW + f"【批量推送触发】累积达到 {self._api_rows_since_last_flush} 行，开始推送...")
+                        self._api_rows_since_last_flush = 0
+                        ok = self._flush_pending_locked(auth_info=auth_info)
+                        if ok:
+                            print(Fore.GREEN + "✅ 批量推送成功")
+                        else:
+                            print(Fore.RED + "❌ 批量推送失败，数据将在爬虫完成时重试")
 
                 return written == 1
 
@@ -870,7 +891,7 @@ class Storage:
                 if self.conn:
                     self.conn.rollback()
                 print(Fore.RED + f"写入数据库失败: {str(e)}")
-                return True
+                return False
 
     def save_to_db(self, data_list, auth_info=None):
         """批量写入订单到CSV或数据库"""
